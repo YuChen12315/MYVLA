@@ -1,0 +1,9 @@
+*.pth
+*.zip
+*.tar.gz
+*.h5
+*.ckpt
+data/
+models/
+*.mp4
+*.avi
