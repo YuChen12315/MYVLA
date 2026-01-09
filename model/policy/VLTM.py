@@ -48,11 +48,10 @@ class TransformerHead(nn.Module):
                  num_attn_heads=8,
                  num_shared_attn_layers=4,
                  nhist=3,
-                 rotary_pe=True,
-                 arm_dim=7,
-                 hand_dim=22):
+                 rotary_pe=True,):
         super().__init__()
-
+        self.arm_dim=7,
+        self.hand_dim=22
         # Different embeddings
         self.time_emb = nn.Sequential(
             SinusoidalPosEmb(embedding_dim),
