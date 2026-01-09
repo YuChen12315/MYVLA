@@ -13,26 +13,26 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import trange, tqdm
 
-from modeling.encoder.text import fetch_tokenizers
 from ..common_utils import count_parameters
 from ..depth2cloud import fetch_depth2cloud
 from ..data_preprocessors import fetch_data_preprocessor
 from ..ema import EMA
 from ..schedulers import fetch_scheduler
 from .utils import compute_metrics
+from model.policy.factory import make_model
 
 
 class BaseTrainTester:
     """Train/test a trajectory optimization algorithm."""
 
-    def __init__(self, args, dataset_cls, model_cls):
+    def __init__(self, args, dataset_cls, model_name, model_config):
         """Initialize."""
         self.args = args
         self.dataset_cls = dataset_cls
-        self.model_cls = model_cls
+        self.model_name = model_name
+        self.model_config = model_config
 
         self.preprocessor = fetch_data_preprocessor(self.args.dataset)(
-            self.args.keypose_only,
             self.args.num_history,
             custom_imsize=self.args.custom_img_size,
             depth2cloud=fetch_depth2cloud(self.args.dataset)
@@ -109,22 +109,9 @@ class BaseTrainTester:
     def get_model(self):
         """Initialize the model."""
         # Initialize model with arguments
-        _model = self.model_cls(
-            backbone=self.args.backbone,
-            finetune_backbone=self.args.finetune_backbone,
-            finetune_text_encoder=self.args.finetune_text_encoder,
-            num_vis_instr_attn_layers=self.args.num_vis_instr_attn_layers,
-            fps_subsampling_factor=self.args.fps_subsampling_factor,
-            embedding_dim=self.args.embedding_dim,
-            num_attn_heads=self.args.num_attn_heads,
-            nhist=self.args.num_history,
-            nhand=2 if self.args.bimanual else 1,
-            num_shared_attn_layers=self.args.num_shared_attn_layers,
-            relative=self.args.relative_action,
-            rotation_format=self.args.rotation_format,
-            denoise_timesteps=self.args.denoise_timesteps,
-            denoise_model=self.args.denoise_model,
-            lv2_batch_size=self.args.lv2_batch_size
+        _model = make_model(
+            model_type=self.model_name,
+            config=self.model_config
         )
 
         # Print basic modules' parameters
@@ -228,7 +215,6 @@ class BaseTrainTester:
 
         # Get model
         model = self.get_model()
-        self.tokenizer = fetch_tokenizers(self.args.backbone)
         if not os.path.exists(self.args.checkpoint):
             normalizer = self.get_workspace_normalizer()
             model.workspace_normalizer.copy_(normalizer)
@@ -247,6 +233,7 @@ class BaseTrainTester:
         # make sure to compile before DDP!
         if self.args.use_compile:
             model.compute_loss = torch.compile(model.compute_loss, fullgraph=True)
+        #for distributed training
         model = DistributedDataParallel(
             model, device_ids=[self.args.local_rank],
             broadcast_buffers=False, find_unused_parameters=True
@@ -289,16 +276,16 @@ class BaseTrainTester:
         iter_loader = iter(train_loader)
         for step_id in trange(start_iter, self.args.train_iters):
             try:
-                sample = next(iter_loader)
+                batch = next(iter_loader)
             except StopIteration:
                 # when the iterator is exhausted, we need to reset it
                 # and increment the epoch
                 epoch += 1
                 train_sampler.set_epoch(epoch)
                 iter_loader = iter(train_loader)
-                sample = next(iter_loader)
+                batch = next(iter_loader)
 
-            self.train_one_step(model, optimizer, scaler, lr_scheduler, sample)
+            self.train_one_step(model, optimizer, scaler, lr_scheduler, batch)
             self.ema.step(model, ema_model, self.args.use_ema, step_id)
 
             if (step_id + 1) % self.args.val_freq == 0 and dist.get_rank() == 0:
@@ -330,16 +317,12 @@ class BaseTrainTester:
     def prepare_batch(self, sample, augment=False):
         pass  # implement in children
 
-    def _model_forward(self, model, sample, training=True):
-        action, action_mask, rgbs, rgb2d, pcds, instr, prop = self.prepare_batch(
-            sample, augment=training
-        )
-        if self.args.pre_tokenize:
-            instr = self.tokenizer(instr).cuda(non_blocking=True)
+    def _model_forward(self, model, batch, training=True):
+        batch = self.prepare_batch(batch, augment=training)
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             out = model(
-                action, action_mask, rgbs, rgb2d, pcds, instr, prop,
-                run_inference=not training
+                batch,
+                train=training
             )
         return out  # loss if training, else action
 
@@ -371,20 +354,20 @@ class BaseTrainTester:
         device = next(model.parameters()).device
         model.eval()
 
-        for i, sample in tqdm(enumerate(loader)):
+        for i, batch in tqdm(enumerate(loader)):
             if i == val_iters:
                 break
 
-            pred_action = self._model_forward(model, sample, training=False)
-            gt_action = sample["action"].cuda(non_blocking=True)
+            pred_action = self._model_forward(model, batch, training=False)
+            gt_action = batch["action"].cuda(non_blocking=True)
             if self.args.relative_action:
                 pred_action = relative_to_absolute(
                     pred_action[:, :, 0],
-                    sample["proprioception"].cuda(non_blocking=True)[:, :, 0]
+                    batch["proprioception"].cuda(non_blocking=True)[:, :, 0]
                 )
                 gt_action = relative_to_absolute(
                     gt_action[:, :, 0],
-                    sample["proprioception"].cuda(non_blocking=True)[:, :, 0]
+                    batch["proprioception"].cuda(non_blocking=True)[:, :, 0]
                 )
 
             losses, losses_B = compute_metrics(pred_action, gt_action)
@@ -397,7 +380,7 @@ class BaseTrainTester:
                 values[key] = torch.cat([values[key], l.unsqueeze(0)])
 
             # Gather per-task statistics
-            tasks = np.array(sample["task"])
+            tasks = np.array(batch["task"])
             for n, l in losses_B.items():
                 for task in np.unique(tasks):
                     key = f"{split}-loss/{task}/{n}"

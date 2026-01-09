@@ -22,7 +22,7 @@ def fetch_tokenizers(model_name):
 
 def fetch_pretrained_model(name):
     if name == 'PaliGemma':
-        from paligemma_with_expert import (
+        from .paligemma_with_expert import (
             PaliGemmaWithExpertConfig,
             PaliGemmaWithExpertModel,
         )

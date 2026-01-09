@@ -1,14 +1,15 @@
 from dataclasses import dataclass, field
-from policy import FeatureType, NormalizationMode, PolicyConfig
 import draccus
 from typing import Optional
 
+from .policy import PolicyConfig
 CONFIG_NAME = "config.json"
 @dataclass
 class EncoderConfig:
     """Encoder 配置"""
     vl_backbone: Optional[str] = "PaliGemma"
-    touch_encoder: str = "moevt"
+    # touch_encoder: str = "moevt"
+    touch_encoder: str = None
     finetune_visual_backbone: bool = False
     finetune_llm_backbone: bool = False
     finetune_touch_encoder: bool = True
@@ -40,55 +41,60 @@ class VLTMConfig(PolicyConfig):
     n_obs_steps: int = 3
     horizon: int = 10
     n_action_steps: int = 10
-
-    normalization_mapping: dict[str, NormalizationMode] = field(
-        default_factory=lambda: {
-            "VISUAL": NormalizationMode.MEAN_STD,
-            "STATE": NormalizationMode.MIN_MAX,
-            "ACTION": NormalizationMode.MIN_MAX,
-        }
-    )
     
-    resize_imgs_with_padding: Optional[tuple[int, int]] = (224, 224)
-    tokenizer_max_length: int = 77
     # Encoder arguments
     encoder_config: EncoderConfig = field(default_factory=EncoderConfig)
     
     # Encoder and decoder arguments
     embedding_dim=120
-    num_attn_heads=8 
-    nhand=2
+    
+    # Shorter state and action vectors will be padded
+    max_state_dim: int = 32
+    max_action_dim: int = 32
+
+    # Image preprocessing
+    resize_imgs_with_padding: tuple[int, int] = (224, 224)
+
+    # Add empty images. Used by pi0_aloha_sim which adds the empty
+    # left and right wrist cameras in addition to the top camera.
+    empty_cameras: int = 0
+
+    # Tokenizer
+    tokenizer_max_length: int = 48
+
+    # Projector
+    proj_width: int = 1024
+
+    # Decoding
+    num_steps: int = 10
+
+    # Attention utils
+    use_cache: bool = True
+    attention_implementation: str = "eager"  # or fa2, flex
+
+    # Finetuning settings
+    freeze_vision_encoder: bool = True
+    train_expert_only: bool = False
+    train_state_proj: bool = True
+
+    # Training presets
+    optimizer_lr: float = 2.5e-5
+    optimizer_betas: tuple[float, float] = (0.9, 0.95)
+    optimizer_eps: float = 1e-8
+    optimizer_weight_decay: float = 1e-10
+
+    scheduler_warmup_steps: int = 1_000
+    scheduler_decay_steps: int = 30_000
+    scheduler_decay_lr: float = 2.5e-6
 
     # Denoising arguments
-    denoise_timesteps=5
-    denoise_model="rectified_flow"
-    beta_schedule: str = "squaredcos_cap_v2"
-    beta_start: float = 0.0001
-    beta_end: float = 0.02
-    prediction_type: str = "epsilon"
-    clip_sample: bool = True
-    clip_sample_range: float = 1.0
-    # Training arguments
-    dexhand_dim = 6  # dexhand has 6 DoF
-    # Training presets
-    optimizer_lr: float = 1e-4
-    optimizer_betas: tuple = (0.95, 0.999)
-    optimizer_eps: float = 1e-8
-    optimizer_weight_decay: float = 5e-4
-    scheduler_name: str = "cosine"
-    scheduler_warmup_steps: int = 500
+    num_steps: int = 10
 
     def __post_init__(self):
         super().__post_init__()
-
-        """Input validation (not exhaustive)."""
-        if not self.backbone.startswith("clip"):
-            raise ValueError(
-                f"`backbone` must be one of the clip variants. Got {self.backbone}."
-            )
             
-def main():
-    config = VLTMConfig()
+def main(args):
+    config = VLTMConfig(args)
     print(config)
             
 if __name__ == "__main__":
@@ -97,10 +103,4 @@ if __name__ == "__main__":
     cli = argparse.ArgumentParser(...)
     cli.add_argument("--n_obs_steps", type=int, default=1, help="Number of observation steps")
     args = cli.parse_args()
-
-    # 重新构造 sys.argv，使 wrapper 使用这些值（不要忘了保留程序名在 sys.argv[0]）
-    new_argv = [sys.argv[0]]
-    new_argv.append(f"--n_obs_steps={args.n_obs_steps}")
-
-    sys.argv = new_argv
-    main()
+    main(args)

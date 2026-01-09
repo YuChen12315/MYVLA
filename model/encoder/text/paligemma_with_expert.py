@@ -27,7 +27,7 @@ from transformers import (
 )
 from transformers.models.auto import CONFIG_MAPPING
 
-from flex_attention import flex_attention_forward
+from .flex_attention import flex_attention_forward
 
 
 def apply_rope(x, positions, max_wavelength=10_000):

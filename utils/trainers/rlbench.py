@@ -6,20 +6,11 @@ from .base import BaseTrainTester
 class RLBenchTrainTester(BaseTrainTester):
 
     @torch.no_grad()
-    def prepare_batch(self, sample, augment=False):
-        sample["action"] = self.preprocessor.process_actions(sample["action"])
-        proprio = self.preprocessor.process_proprio(sample["proprioception"])
-        rgbs, pcds = self.preprocessor.process_obs(
-            sample["rgb"], sample["rgb2d"],
-            sample["depth"], sample["extrinsics"], sample["intrinsics"],
+    def prepare_batch(self, batch, augment=False):
+        batch["action"] = self.preprocessor.process_actions(batch["action"])
+        batch["proprioception"] = self.preprocessor.process_proprio(batch["proprioception"])
+        batch["rgb"] = self.preprocessor.process_obs(
+            batch["rgb"],
             augment=augment
         )
-        return (
-            sample["action"],
-            torch.zeros(sample["action"].shape[:-1], dtype=bool, device='cuda'),
-            rgbs,
-            None,
-            pcds,
-            sample["instr"],
-            proprio
-        )
+        return batch

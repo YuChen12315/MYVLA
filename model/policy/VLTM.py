@@ -1,29 +1,26 @@
 import torch
-import torch.nn as nn
+from torch import Tensor, nn
 from torch.nn import functional as F
 from typing import Optional
 from typing_extensions import override
-from base_model import BaseModel
+
 from model.config.policy import PolicyConfig
+from .base_model import BaseModel
 from ..encoder.multimodal.vltencoder import Encoder
 from ..noise_scheduler import fetch_schedulers
 from ..encoder.text import fetch_tokenizers
 
 # import einops
-from ..utils.position_encodings import RotaryPositionEncoding3D, SinusoidalPosEmb
 # from ..utils.layers import AttentionModule
 
 
 class VLTM(BaseModel):
 
     def __init__(self,config: PolicyConfig):
-        super().__init__(action_dim=config.action_dim, action_horizon=config.action_horizon)
+        super().__init__()
         # Vision-language encoder, runs only once
         self.config = config    
         self.encoder = Encoder(config.encoder_config)
-        self.arm_scheduler, self.hand_scheduler = fetch_schedulers(
-            config.denoise_model, config.denoise_timesteps
-        )
         self.language_tokenizer = fetch_tokenizers(
             config.encoder_config.vl_backbone
         )
@@ -74,11 +71,12 @@ class VLTM(BaseModel):
         lang_tokens = tokenized_prompt["input_ids"].to(device=device)
         lang_masks = tokenized_prompt["attention_mask"].to(device=device, dtype=torch.bool)
         
+        states = pad_vector(batch['states'], self.config.max_state_dim)
         observations = {
             'images': prepared_images,
             # 'point_clouds': batch['point_clouds'],
-            'touchs': batch['touchs'],
-            'popriotions': batch['states'],
+            # 'touchs': batch['touchs'],
+            'propriotion': states,
             'img_masks': img_masks,
             'lang_tokens': lang_tokens,
             'lang_masks': lang_masks,
@@ -90,7 +88,9 @@ class VLTM(BaseModel):
         batch: dict[str, torch.Tensor],
     ) -> torch.Tensor:
         #TODO: modify according to action space
-        return batch['actions']
+        actions = pad_vector(batch['actions'], self.config.max_action_dim)
+        return actions
+
     
     def _build_action_expert(self, VL_encoder):
         return VL_encoder
@@ -116,7 +116,7 @@ class VLTM(BaseModel):
         att_masks += [1]
 
         # Embed timestep using sine-cosine positional encoding with sensitivity in the range [0, 1]
-        time_emb = SinusoidalPosEmb(
+        time_emb = create_sinusoidal_pos_embedding(
             timestep, self.config.proj_width, min_period=4e-3, max_period=4.0, device=device
         )
         time_emb = time_emb.type(dtype=dtype)
@@ -157,28 +157,27 @@ class VLTM(BaseModel):
     ) -> torch.Tensor:
 
         observation = self._prepare_observations(batch)
-        states = observation['propriotions']
-        actions = self._prepare_actions(batch)     
-        
+        states = observation['propriotion']
+        actions = self._prepare_actions(batch)   
+          
+        time_beta = sample_beta(1.5, 1.0, actions.shape[0], actions.device)
+        time = time_beta * 0.999 + 0.001
+        time = time.to(dtype=torch.float32, device=actions.device)
         # Sample noise
-        noise = torch.randn(actions.shape, device=actions.device)
-
+        noise = torch.normal(
+            mean=0.0,
+            std=1.0,
+            size=actions.shape,
+            dtype=torch.float32,
+            device=actions.device,
+        )
         # Sample a random timestep
-        timesteps = self.position_scheduler.sample_noise_step(
+        timesteps = self.arm_scheduler.sample_noise_step(
             num_noise=len(noise), device=noise.device
         )
-
-        # Add noise to the clean trajectories
-        arm = self.arm_scheduler.add_noise(
-            actions[..., 3:], noise[..., 3:],
-            timesteps
-        )
-        
-        hand = self.hand_scheduler.add_noise(
-            actions[..., :3], noise[..., :3],
-            timesteps
-        )
-        noisy_xt = torch.cat((arm, hand), -1)
+        time_expanded = time[:, None, None]
+        noisy_xt = time_expanded * noise + (1 - time_expanded) * actions
+        denoise_target = noise - actions
         
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.encoder(observation)
         suffix_embs, suffix_pad_masks, suffix_att_masks = self.embed_suffix(states, noisy_xt, timesteps)
@@ -201,284 +200,127 @@ class VLTM(BaseModel):
         suffix_out = suffix_out.to(dtype=torch.float32)
         suffix_out = self.action_out_proj(suffix_out)
         # Compute loss
-    
-        denoise_target = self.arm_scheduler.prepare_target(
-            noise, actions
-        )
         losses = F.mse_loss(denoise_target, suffix_out, reduction="none")
         return losses
     
     @override
-    def sample_actions(self, observation, **kwargs) -> torch.Tensor:
-        pass
+    def sample_actions(self, observation, noise=None) -> torch.Tensor:
+        """Do a full inference forward and compute the action (batch_size x num_steps x num_motors)"""
+        state = observation['propriotion']
+        
+        bsize = state.shape[0]
+        device = state.device
+
+        if noise is None:
+            actions_shape = (bsize, self.config.n_action_steps, self.config.max_action_dim)
+            noise = torch.normal(
+                mean=0.0,
+                std=1.0,
+                size=actions_shape,
+                dtype=torch.float32,
+                device=device,
+            )
+
+        prefix_embs, prefix_pad_masks, prefix_att_masks = self.encoder(observation)
+        prefix_att_2d_masks = make_att_2d_masks(prefix_pad_masks, prefix_att_masks)
+        prefix_position_ids = torch.cumsum(prefix_pad_masks, dim=1) - 1
+
+        # Compute image and language key value cache
+        _, past_key_values = self.action_expert.forward(
+            attention_mask=prefix_att_2d_masks,
+            position_ids=prefix_position_ids,
+            past_key_values=None,
+            inputs_embeds=[prefix_embs, None],
+            use_cache=self.config.use_cache,
+            fill_kv_cache=True,
+        )
+
+        dt = -1.0 / self.config.num_steps
+        dt = torch.tensor(dt, dtype=torch.float32, device=device)
+
+        x_t = noise
+        time = torch.tensor(1.0, dtype=torch.float32, device=device)
+        while time >= -dt / 2:
+            expanded_time = time.expand(bsize)
+            v_t = self.denoise_step(
+                state,
+                prefix_pad_masks,
+                past_key_values,
+                x_t,
+                expanded_time,
+            )
+
+            # Euler step
+            x_t += dt * v_t
+            time += dt
+            
+        return x_t
+    
+    def denoise_step(
+        self,
+        state,
+        prefix_pad_masks,
+        past_key_values,
+        x_t,
+        timestep,
+    ):
+        """Apply one denoising step of the noise `x_t` at a given timestep."""
+        suffix_embs, suffix_pad_masks, suffix_att_masks = self.embed_suffix(state, x_t, timestep)
+
+        suffix_len = suffix_pad_masks.shape[1]
+        batch_size = prefix_pad_masks.shape[0]
+        prefix_len = prefix_pad_masks.shape[1]
+        prefix_pad_2d_masks = prefix_pad_masks[:, None, :].expand(batch_size, suffix_len, prefix_len)
+
+        suffix_att_2d_masks = make_att_2d_masks(suffix_pad_masks, suffix_att_masks)
+
+        full_att_2d_masks = torch.cat([prefix_pad_2d_masks, suffix_att_2d_masks], dim=2)
+
+        prefix_offsets = torch.sum(prefix_pad_masks, dim=-1)[:, None]
+        position_ids = prefix_offsets + torch.cumsum(suffix_pad_masks, dim=1) - 1
+
+        outputs_embeds, _ = self.action_expert.forward(
+            attention_mask=full_att_2d_masks,
+            position_ids=position_ids,
+            past_key_values=past_key_values,
+            inputs_embeds=[None, suffix_embs],
+            use_cache=self.config.use_cache,
+            fill_kv_cache=False,
+        )
+        suffix_out = outputs_embeds[1]
+        suffix_out = suffix_out[:, -self.config.n_action_steps :]
+        suffix_out = suffix_out.to(dtype=torch.float32)
+        v_t = self.action_out_proj(suffix_out)
+        return v_t
     
     
+import math
+def create_sinusoidal_pos_embedding(
+    time: torch.tensor, dimension: int, min_period: float, max_period: float, device="cpu"
+    ) -> Tensor:
+    """Computes sine-cosine positional embedding vectors for scalar positions."""
+    if dimension % 2 != 0:
+        raise ValueError(f"dimension ({dimension}) must be divisible by 2")
 
-# class TransformerHead(nn.Module):
+    if time.ndim != 1:
+        raise ValueError("The time tensor is expected to be of shape `(batch_size, )`.")
 
-#     def __init__(self,
-#                  embedding_dim=60,
-#                  num_attn_heads=8,
-#                  num_shared_attn_layers=4,
-#                  nhist=3,
-#                  rotary_pe=True,):
-#         super().__init__()
-#         self.arm_dim=7,
-#         self.hand_dim=22
-#         # Different embeddings
-#         self.time_emb = nn.Sequential(
-#             SinusoidalPosEmb(embedding_dim),
-#             nn.Linear(embedding_dim, embedding_dim),
-#             nn.SiLU(),
-#             nn.Linear(embedding_dim, embedding_dim)
-#         )
-#         self.curr_gripper_emb = nn.Sequential(
-#             nn.Linear(embedding_dim * nhist, embedding_dim),
-#             nn.SiLU(),
-#             nn.Linear(embedding_dim, embedding_dim)
-#         )
-#         self.traj_time_emb = SinusoidalPosEmb(embedding_dim)
-#         self.hand_embed = nn.Embedding(2, embedding_dim)        #表示双臂的嵌入
+    dtype = get_safe_dtype(torch.float64, device.type)
+    fraction = torch.linspace(0.0, 1.0, dimension // 2, dtype=dtype, device=device)
+    period = min_period * (max_period / min_period) ** fraction
 
-#         # Attention from trajectory queries to language
-#         self.traj_lang_attention = AttentionModule(
-#             num_layers=1,
-#             d_model=embedding_dim,
-#             dim_fw=4 * embedding_dim,
-#             dropout=0.1,
-#             n_heads=num_attn_heads,
-#             pre_norm=False,
-#             rotary_pe=False,
-#             use_adaln=False,
-#             is_self=False
-#         )
+    # Compute the outer product
+    scaling_factor = 1.0 / period * 2 * math.pi
+    sin_input = scaling_factor[None, :] * time[:, None]
+    pos_emb = torch.cat([torch.sin(sin_input), torch.cos(sin_input)], dim=1)
+    return pos_emb
 
-#         # Estimate attends to context (no subsampling)
-#         self.cross_attn = AttentionModule(
-#             num_layers=2,
-#             d_model=embedding_dim,
-#             dim_fw=embedding_dim,
-#             dropout=0.1,
-#             n_heads=num_attn_heads,
-#             pre_norm=False,
-#             rotary_pe=rotary_pe,
-#             use_adaln=True,
-#             is_self=False
-#         )
 
-#         # Shared attention layers
-#         self.self_attn = AttentionModule(
-#             num_layers=num_shared_attn_layers,
-#             d_model=embedding_dim,
-#             dim_fw=embedding_dim,
-#             dropout=0.1,
-#             n_heads=num_attn_heads,
-#             pre_norm=False,
-#             rotary_pe=rotary_pe,
-#             use_adaln=True,
-#             is_self=True
-#         )
+def sample_beta(alpha, beta, bsize, device):
+    gamma1 = torch.empty((bsize,), device=device).uniform_(0, 1).pow(1 / alpha)
+    gamma2 = torch.empty((bsize,), device=device).uniform_(0, 1).pow(1 / beta)
+    return gamma1 / (gamma1 + gamma2)
 
-#         # Specific (non-shared) Output layers:
-#         # 1. Rotation
-#         # self.rotation_proj = nn.Linear(embedding_dim, embedding_dim)
-#         # self.rotation_self_attn = AttentionModule(
-#         #     num_layers=2,
-#         #     d_model=embedding_dim,
-#         #     dim_fw=embedding_dim,
-#         #     dropout=0.1,
-#         #     n_heads=num_attn_heads,
-#         #     pre_norm=False,
-#         #     rotary_pe=rotary_pe,
-#         #     use_adaln=True,
-#         #     is_self=True
-#         # )
-#         # self.rotation_predictor = nn.Sequential(
-#         #     nn.Linear(embedding_dim, embedding_dim),
-#         #     nn.ReLU(),
-#         #     nn.Linear(embedding_dim, rot_dim)
-#         # )
-
-#         # # 2. Position
-#         # self.position_proj = nn.Linear(embedding_dim, embedding_dim)
-#         # self.position_self_attn = AttentionModule(
-#         #     num_layers=2,
-#         #     d_model=embedding_dim,
-#         #     dim_fw=embedding_dim,
-#         #     dropout=0.1,
-#         #     n_heads=num_attn_heads,
-#         #     pre_norm=False,
-#         #     rotary_pe=rotary_pe,
-#         #     use_adaln=True,
-#         #     is_self=True
-#         # )
-#         # self.position_predictor = nn.Sequential(
-#         #     nn.Linear(embedding_dim, embedding_dim),
-#         #     nn.ReLU(),
-#         #     nn.Linear(embedding_dim, 3)
-#         # )
-
-#         # # 3. Openess
-#         # self.openess_predictor = nn.Sequential(
-#         #     nn.Linear(embedding_dim, embedding_dim),
-#         #     nn.ReLU(),
-#         #     nn.Linear(embedding_dim, 1)
-#         # )
-
-#     def forward(self, traj_feats, trajectory, timesteps,
-#                 rgb3d_feats, rgb3d_pos, rgb2d_feats, rgb2d_pos,
-#                 instr_feats, instr_pos, proprio_feats,
-#                 fps_scene_feats, fps_scene_pos):
-#         """
-#         Arguments:
-#             traj_feats: (B, trajectory_length, nhand, F)
-#             trajectory: (B, trajectory_length, nhand, 3+6+X)
-#             timesteps: (B, 1)
-#             rgb3d_feats: (B, N, F)
-#             rgb3d_pos: (B, N, 3)
-#             rgb2d_feats: (B, N2d, F)
-#             rgb2d_pos: (B, N2d, 3)
-#             instr_feats: (B, L, F)
-#             instr_pos: (B, L, 3)
-#             proprio_feats: (B, nhist*nhand, F)
-#             fps_scene_feats: (B, M, F), M < N
-#             fps_scene_pos: (B, M, 3)
-
-#         Returns:
-#             list of (B, trajectory_length, nhand, 3+6+X)
-#         """
-#         _, traj_len, nhand, _ = trajectory.shape
-
-#         # Trajectory features
-#         if nhand > 1:
-#             traj_feats = traj_feats + self.hand_embed.weight[None, None]
-#         traj_feats = einops.rearrange(traj_feats, 'b l h c -> b (l h) c')
-#         trajectory = einops.rearrange(trajectory, 'b l h c -> b (l h) c')
-
-#         # Trajectory features cross-attend to context features
-#         traj_time_pos = self.traj_time_emb(
-#             torch.arange(0, traj_len, device=traj_feats.device)
-#         )[None, None].repeat(len(traj_feats), 1, nhand, 1)
-#         traj_time_pos = einops.rearrange(traj_time_pos, 'b l h c -> b (l h) c')
-#         traj_feats = self.traj_lang_attention(
-#             seq1=traj_feats,
-#             seq2=instr_feats,
-#             seq1_sem_pos=traj_time_pos, seq2_sem_pos=None
-#         )[-1]
-#         traj_feats = traj_feats + traj_time_pos
-#         traj_xyz = trajectory[..., :3]
-
-#         # Denoising timesteps' embeddings
-#         time_embs = self.encode_denoising_timestep(
-#             timesteps, proprio_feats
-#         )
-
-#         # Positional embeddings
-#         rel_traj_pos, rel_scene_pos, rel_pos = self.get_positional_embeddings(
-#             traj_xyz, traj_feats,
-#             rgb3d_pos, rgb3d_feats, rgb2d_feats, rgb2d_pos,
-#             timesteps, proprio_feats,
-#             fps_scene_feats, fps_scene_pos,
-#             instr_feats, instr_pos
-#         )
-
-#         # Cross attention from gripper to full context
-#         traj_feats = self.cross_attn(
-#             seq1=traj_feats,
-#             seq2=rgb3d_feats,
-#             seq1_pos=rel_traj_pos,
-#             seq2_pos=rel_scene_pos,
-#             ada_sgnl=time_embs
-#         )[-1]
-
-#         # Self attention among gripper and sampled context
-#         features = self.get_sa_feature_sequence(
-#             traj_feats, fps_scene_feats,
-#             rgb3d_feats, rgb2d_feats, instr_feats
-#         )
-#         features = self.self_attn(
-#             seq1=features,
-#             seq2=features,
-#             seq1_pos=rel_pos,
-#             seq2_pos=rel_pos,
-#             ada_sgnl=time_embs
-#         )[-1]
-
-#         # Rotation head
-#         rotation = self.predict_rot(
-#             features, rel_pos, time_embs, traj_feats.shape[1]
-#         )
-
-#         # Position head
-#         position, position_features = self.predict_pos(
-#             features, rel_pos, time_embs, traj_feats.shape[1]
-#         )
-
-#         # Openess head from position head
-#         openess = self.openess_predictor(position_features)
-
-#         return [
-#             torch.cat((position, rotation, openess), -1)
-#                  .unflatten(1, (traj_len, nhand))
-#         ]
-
-#     def encode_denoising_timestep(self, timestep, proprio_feats):
-#         """
-#         Compute denoising timestep features and positional embeddings.
-
-#         Args:
-#             - timestep: (B,)
-
-#         Returns:
-#             - time_feats: (B, F)
-#         """
-#         time_feats = self.time_emb(timestep)
-#         proprio_feats = proprio_feats.flatten(1)
-#         curr_gripper_feats = self.curr_gripper_emb(proprio_feats)
-#         return time_feats + curr_gripper_feats
-
-#     def get_positional_embeddings(
-#         self,
-#         traj_xyz, traj_feats,
-#         rgb3d_pos, rgb3d_feats, rgb2d_feats, rgb2d_pos,
-#         timesteps, proprio_feats,
-#         fps_scene_feats, fps_scene_pos,
-#         instr_feats, instr_pos
-#     ):
-#         return None, None, None
-
-#     def get_sa_feature_sequence(
-#         self,
-#         traj_feats, fps_scene_feats,
-#         rgb3d_feats, rgb2d_feats, instr_feats
-#     ):
-#         return torch.cat([traj_feats, fps_scene_feats], 1)
-
-#     def predict_pos(self, features, pos, time_embs, traj_len):
-#         position_features = self.position_self_attn(
-#             seq1=features,
-#             seq2=features,
-#             seq1_pos=pos,
-#             seq2_pos=pos,
-#             ada_sgnl=time_embs
-#         )[-1]
-#         position_features = position_features[:, :traj_len]
-#         position_features = self.position_proj(position_features)  # (B, N, C)
-#         position = self.position_predictor(position_features)
-#         return position, position_features
-
-#     def predict_rot(self, features, pos, time_embs, traj_len):
-#         rotation_features = self.rotation_self_attn(
-#             seq1=features,
-#             seq2=features,
-#             seq1_pos=pos,
-#             seq2_pos=pos,
-#             ada_sgnl=time_embs
-#         )[-1]
-#         rotation_features = rotation_features[:, :traj_len]
-#         rotation_features = self.rotation_proj(rotation_features)  # (B, N, C)
-#         rotation = self.rotation_predictor(rotation_features)
-#         return rotation
 
 def make_att_2d_masks(pad_masks, att_masks):
     """Copied from big_vision.
@@ -546,9 +388,13 @@ def pad_vector(vector, new_dim):
     new_vector[..., :current_dim] = vector
     return new_vector
 
-def normalize(x, min_val, max_val):
-    return (x - min_val) / (max_val - min_val)
-
-def unnormalize(x, min_val, max_val):
-    return x * (max_val - min_val) + min_val
-
+def get_safe_dtype(dtype: torch.dtype, device: str | torch.device):
+    """
+    mps is currently not compatible with float64
+    """
+    if isinstance(device, torch.device):
+        device = device.type
+    if device == "mps" and dtype == torch.float64:
+        return torch.float32
+    else:
+        return dtype

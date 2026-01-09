@@ -2,17 +2,18 @@ import torch.nn as nn
 from model.config.policy import PolicyConfig
 
 def fetch_model_class(model_type: str)-> nn.Module:
-    if model_type == 'denoise3d':  # standard 3DFA
-        from .denoise_actor_3d import DenoiseActor as DenoiseActor3D
-        return DenoiseActor3D
-    elif model_type == 'denoise2d':  # standard 2DFA
-        from .denoise_actor_2d import DenoiseActor as DenoiseActor2D
-        return DenoiseActor2D
-    elif model_type == 'VLTM':  # myvla
+    if model_type.upper() == 'VLTM':  # myvla
         from .VLTM import VLTM as VLTM
         return VLTM
     else:
         raise ValueError(f"model type '{model_type}' is not available.")
+    
+def make_policy_config(policy_type: str, args)-> PolicyConfig:
+    if policy_type.upper() == 'VLTM':
+        from model.config.VLTM import VLTMConfig
+        return VLTMConfig(args)
+    else:
+        raise ValueError(f"policy type '{policy_type}' is not available.")
     
 def make_model(
     model_type: str,

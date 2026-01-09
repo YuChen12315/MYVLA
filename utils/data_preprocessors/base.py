@@ -1,8 +1,7 @@
 class DataPreprocessor:
 
-    def __init__(self, keypose_only=False, num_history=1,
+    def __init__(self, num_history=1,
                  custom_imsize=None, depth2cloud=None):
-        self.keypose_only = keypose_only
         self.num_history = num_history
         self.custom_imsize = custom_imsize
         self.depth2cloud = depth2cloud

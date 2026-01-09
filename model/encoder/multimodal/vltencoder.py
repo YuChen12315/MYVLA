@@ -9,13 +9,17 @@ from ..touch import fetch_touch_encoders
 class Encoder(nn.Module):
     def __init__(self, config: EncoderConfig):  # 直接传入配置对象
         super().__init__()
+        self.encoder = []
+        self.config = config
         if config.vl_backbone:
             self.VL_encoder = fetch_pretrained_model(config.vl_backbone)
-        self.touch_encoder = fetch_touch_encoders(config.touch_encoder)
-        
-        # 设置参数是否需要梯度
-        for p in self.touch_encoder.parameters():
-            p.requires_grad = config.finetune_touch_encoder
+            self.encoder.append(self.VL_encoder)
+        if config.touch_encoder is not None:
+            self.touch_encoder = fetch_touch_encoders(config.touch_encoder)
+            self.encoder.append(self.touch_encoder)
+            # 设置参数是否需要梯度
+            for p in self.touch_encoder.parameters():
+                p.requires_grad = config.finetune_touch_encoder
         
     def forward(self, observations: dict):
         images = observations['images']
@@ -24,12 +28,8 @@ class Encoder(nn.Module):
         lang_masks = observations['lang_masks']
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks
-        )
-        # TODO: touch encoder forward
-        touch_obs = observations['touch']
-        touch_embs = self.touch_encoder(touch_obs)
-        prefix_embs = torch.cat([prefix_embs, touch_embs], dim=1)
-        
+        )        
+
         return prefix_embs, prefix_pad_masks, prefix_att_masks
 
         
@@ -46,10 +46,7 @@ class Encoder(nn.Module):
         att_masks = []
 
         # TODO: remove for loop
-        for (
-            img,
-            img_mask,
-        ) in zip(images, img_masks, strict=False):
+        for (img, img_mask) in zip(images, img_masks, strict=False):
             img_emb = self.VL_encoder.embed_image(img)
             img_emb = img_emb.to(dtype=torch.bfloat16)
 
@@ -79,10 +76,19 @@ class Encoder(nn.Module):
         num_lang_embs = lang_emb.shape[1]
         att_masks += [0] * num_lang_embs
 
+        
+        
+        # # TODO: touch encoder forward
+        # if self.config.touch_encoder is not None:
+        #     touch_embs, touch_mask, touch_att_mask = self.touch_encoder(touch_obs)
+        #     embs.append(touch_embs)
+        #     pad_masks.append(touch_mask)
+        #     num_touch_embs = touch_embs.shape[1]
+        #     att_masks += [0] * num_touch_embs
+            
         embs = torch.cat(embs, dim=1)
         pad_masks = torch.cat(pad_masks, dim=1)
         att_masks = torch.tensor(att_masks, dtype=torch.bool, device=pad_masks.device)
         att_masks = att_masks[None, :].expand(bsize, len(att_masks))
-
         return embs, pad_masks, att_masks
     

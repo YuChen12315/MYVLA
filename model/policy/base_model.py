@@ -8,10 +8,9 @@ class BaseModel(nn.Module, abc.ABC):
     """Base class for all model implementations. Specific models should inherit from this class. They should call
     super().__init__() to initialize the shared attributes (action_dim, action_horizon, and max_token_len).
     """
-
-    action_dim: int
-    action_horizon: int
-
+    def __init__(self,):
+        super().__init__() 
+        
     @abc.abstractmethod
     def compute_loss(
         self,
@@ -24,5 +23,5 @@ class BaseModel(nn.Module, abc.ABC):
     @abc.abstractmethod
     def sample_actions(self, observation, **kwargs) -> Tensor: ...
     
-    @abc.abstractmethod
-    def _save_to_safetensor(self):...
+    # @abc.abstractmethod
+    # def _save_to_safetensor(self):...

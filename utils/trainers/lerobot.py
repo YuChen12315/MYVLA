@@ -6,20 +6,20 @@ from .base import BaseTrainTester
 class LerobotTrainTester(BaseTrainTester):
 
     @torch.no_grad()
-    def prepare_batch(self, sample, augment=False):
-        sample["action"] = self.preprocessor.process_actions(sample["action"])
-        proprio = self.preprocessor.process_proprio(sample["proprioception"])
+    def prepare_batch(self, batch, augment=False):
+        batch["action"] = self.preprocessor.process_actions(batch["action"])
+        proprio = self.preprocessor.process_proprio(batch["proprioception"])
         rgbs, pcds = self.preprocessor.process_obs(
-            sample["rgb"], sample["rgb2d"],
-            sample["depth"], sample["extrinsics"], sample["intrinsics"],
+            batch["rgb"], batch["rgb2d"],
+            batch["depth"], batch["extrinsics"], batch["intrinsics"],
             augment=augment
         )
         return (
-            sample["action"],
-            torch.zeros(sample["action"].shape[:-1], dtype=bool, device='cuda'),
+            batch["action"],
+            torch.zeros(batch["action"].shape[:-1], dtype=bool, device='cuda'),
             rgbs,
             None,
             pcds,
-            sample["instr"],
+            batch["instr"],
             proprio
         )
