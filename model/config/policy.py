@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from utils import is_torch_device_available, auto_select_torch_device
 from enum import Enum
 from typing import Any, Protocol

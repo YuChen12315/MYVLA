@@ -15,7 +15,7 @@ class VLTM(BaseModel):
     def __init__(self,config: PolicyConfig):
         super().__init__(action_dim=config.action_dim, action_horizon=config.action_horizon)
         # Vision-language encoder, runs only once
-        self.encoder = None
+        self.encoder = Encoder()
         # Action decoder, runs at every denoising timestep
         self.action_expert = TransformerHead(
             embedding_dim=config.transformer.embedding_dim,
@@ -57,16 +57,16 @@ class TransformerHead(nn.Module):
         self.time_emb = nn.Sequential(
             SinusoidalPosEmb(embedding_dim),
             nn.Linear(embedding_dim, embedding_dim),
-            nn.ReLU(),
+            nn.SiLU(),
             nn.Linear(embedding_dim, embedding_dim)
         )
         self.curr_gripper_emb = nn.Sequential(
             nn.Linear(embedding_dim * nhist, embedding_dim),
-            nn.ReLU(),
+            nn.SiLU(),
             nn.Linear(embedding_dim, embedding_dim)
         )
         self.traj_time_emb = SinusoidalPosEmb(embedding_dim)
-        self.hand_embed = nn.Embedding(2, embedding_dim)
+        self.hand_embed = nn.Embedding(2, embedding_dim)        #表示双臂的嵌入
 
         # Attention from trajectory queries to language
         self.traj_lang_attention = AttentionModule(

@@ -23,3 +23,6 @@ class BaseModel(nn.Module, abc.ABC):
 
     @abc.abstractmethod
     def sample_actions(self, observation, **kwargs) -> Tensor: ...
+    
+    @abc.abstractmethod
+    def _save_to_safetensor(self):...
