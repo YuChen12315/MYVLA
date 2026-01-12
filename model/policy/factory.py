@@ -1,7 +1,5 @@
 import torch.nn as nn
 from model.config.policy import PolicyConfig
-from model.config.flowmatch_2d import FlowMatch2DConfig
-from model.config.flowmatch_3d import FlowMatch3DConfig
 
 def fetch_model_class(model_type: str)-> nn.Module:
     if model_type == 'denoise3d':  # standard 3DFA
@@ -15,17 +13,6 @@ def fetch_model_class(model_type: str)-> nn.Module:
         return VLTM
     else:
         raise ValueError(f"model type '{model_type}' is not available.")
-    return None
-
-def make_model_config(model_type: str, **kwargs) -> PolicyConfig:
-
-    if model_type == "denoise2d":
-        return FlowMatch2DConfig(**kwargs)
-    elif model_type == "denoise3d":
-        return FlowMatch3DConfig(**kwargs)
-    else:
-        raise ValueError(f"model type '{model_type}' is not available.")
-    
     
 def make_model(
     model_type: str,
