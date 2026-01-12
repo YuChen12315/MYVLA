@@ -7,12 +7,12 @@ CONFIG_NAME = "config.json"
 @dataclass
 class EncoderConfig:
     """Encoder 配置"""
-    visual_backbone: str = "clip"
-    llm_backbone: str = "gpt2"
+    vl_backbone: Optional[str] = "PaliGemma"
     touch_encoder: str = "moevt"
     finetune_visual_backbone: bool = False
     finetune_llm_backbone: bool = False
     finetune_touch_encoder: bool = True
+    
 @dataclass
 class VLTMConfig(PolicyConfig):
     """Configuration class for DiffusionPolicy.
@@ -48,7 +48,9 @@ class VLTMConfig(PolicyConfig):
             "ACTION": NormalizationMode.MIN_MAX,
         }
     )
-
+    
+    resize_imgs_with_padding: Optional[tuple[int, int]] = (224, 224)
+    tokenizer_max_length: int = 77
     # Encoder arguments
     encoder_config: EncoderConfig = field(default_factory=EncoderConfig)
     

@@ -4,6 +4,6 @@ def fetch_visual_encoders(model_name):
         from .clip import load_clip
         return load_clip()
     elif model_name == "dino_sigl_vit":
-        from .backbone2d import DinoSigLIPVITBackbone
-        return DinoSigLIPVITBackbone()
+        from .backbone2d import Backbone2D
+        return Backbone2D.init("dinosiglip")
     return None
