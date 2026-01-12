@@ -22,7 +22,11 @@ def fetch_tokenizers(model_name):
 
 def fetch_pretrained_model(name):
     if name == 'PaliGemma':
+<<<<<<< HEAD
         from .paligemma_with_expert import (
+=======
+        from paligemma_with_expert import (
+>>>>>>> 6e963d0 (v-0.0.1  pi0改动 touch encoder 和 2D 视觉编码器，修改动作预测头以适应新的动作维度)
             PaliGemmaWithExpertConfig,
             PaliGemmaWithExpertModel,
         )
