@@ -9,9 +9,12 @@ class EncoderConfig:
     """Encoder 配置"""
     vl_backbone: Optional[str] = "PaliGemma"
 <<<<<<< HEAD
+<<<<<<< HEAD
     # touch_encoder: str = "moevt"
     touch_encoder: str = None
 =======
+=======
+>>>>>>> f271952f1496d454473fffc0d8fa28ed68bede96
     touch_encoder: str = "moevt"
 >>>>>>> 6e963d0 (v-0.0.1  pi0改动 touch encoder 和 2D 视觉编码器，修改动作预测头以适应新的动作维度)
     finetune_visual_backbone: bool = False
@@ -59,7 +62,10 @@ class VLTMConfig(PolicyConfig):
     
     resize_imgs_with_padding: Optional[tuple[int, int]] = (224, 224)
     tokenizer_max_length: int = 77
+<<<<<<< HEAD
 >>>>>>> 6e963d0 (v-0.0.1  pi0改动 touch encoder 和 2D 视觉编码器，修改动作预测头以适应新的动作维度)
+=======
+>>>>>>> f271952f1496d454473fffc0d8fa28ed68bede96
     # Encoder arguments
     encoder_config: EncoderConfig = field(default_factory=EncoderConfig)
     

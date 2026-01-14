@@ -8,6 +8,7 @@ def fetch_model_class(model_type: str)-> nn.Module:
     else:
         raise ValueError(f"model type '{model_type}' is not available.")
 <<<<<<< HEAD
+<<<<<<< HEAD
     
 def make_policy_config(policy_type: str, args)-> PolicyConfig:
     if policy_type.upper() == 'VLTM':
@@ -17,6 +18,8 @@ def make_policy_config(policy_type: str, args)-> PolicyConfig:
         raise ValueError(f"policy type '{policy_type}' is not available.")
 =======
 >>>>>>> 6e963d0 (v-0.0.1  pi0改动 touch encoder 和 2D 视觉编码器，修改动作预测头以适应新的动作维度)
+=======
+>>>>>>> f271952f1496d454473fffc0d8fa28ed68bede96
     
 def make_model(
     model_type: str,

@@ -28,10 +28,14 @@ from transformers import (
 from transformers.models.auto import CONFIG_MAPPING
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 from .flex_attention import flex_attention_forward
 =======
 from flex_attention import flex_attention_forward
 >>>>>>> 6e963d0 (v-0.0.1  pi0改动 touch encoder 和 2D 视觉编码器，修改动作预测头以适应新的动作维度)
+=======
+from flex_attention import flex_attention_forward
+>>>>>>> f271952f1496d454473fffc0d8fa28ed68bede96
 
 
 def apply_rope(x, positions, max_wavelength=10_000):
