@@ -9,61 +9,43 @@ from ..touch import fetch_touch_encoders
 class Encoder(nn.Module):
     def __init__(self, config: EncoderConfig):  # 直接传入配置对象
         super().__init__()
-<<<<<<< HEAD
-<<<<<<< HEAD
-        self.encoder = []
+
         self.config = config
         if config.vl_backbone:
             self.VL_encoder = fetch_pretrained_model(config.vl_backbone)
-            self.encoder.append(self.VL_encoder)
+        else:
+            raise ValueError("VL backbone must be specified in the configuration.")
+            
         if config.touch_encoder is not None:
-            self.touch_encoder = fetch_touch_encoders(config.touch_encoder)
-            self.encoder.append(self.touch_encoder)
+            touch_encoder_cls = fetch_touch_encoders(config.touch_encoder)
+            self.touch_encoder = touch_encoder_cls(**config.touch_encoder_params)
+            
             # 设置参数是否需要梯度
             for p in self.touch_encoder.parameters():
                 p.requires_grad = config.finetune_touch_encoder
-=======
-=======
->>>>>>> f271952f1496d454473fffc0d8fa28ed68bede96
-        if config.vl_backbone:
-            self.VL_encoder = fetch_pretrained_model(config.vl_backbone)
-        self.touch_encoder = fetch_touch_encoders(config.touch_encoder)
-        
-        # 设置参数是否需要梯度
-        for p in self.touch_encoder.parameters():
-            p.requires_grad = config.finetune_touch_encoder
->>>>>>> 6e963d0 (v-0.0.1  pi0改动 touch encoder 和 2D 视觉编码器，修改动作预测头以适应新的动作维度)
         
     def forward(self, observations: dict):
         images = observations['images']
         img_masks = observations['img_masks']
         lang_tokens = observations['lang_tokens']
         lang_masks = observations['lang_masks']
+        touch_images = observations['touch']
+        touch_masks = observations['touch_masks']
         prefix_embs, prefix_pad_masks, prefix_att_masks = self.embed_prefix(
             images, img_masks, lang_tokens, lang_masks
-<<<<<<< HEAD
-<<<<<<< HEAD
-        )        
 
-=======
-=======
->>>>>>> f271952f1496d454473fffc0d8fa28ed68bede96
         )
         # TODO: touch encoder forward
         touch_obs = observations['touch']
         touch_embs = self.touch_encoder(touch_obs)
         prefix_embs = torch.cat([prefix_embs, touch_embs], dim=1)
-        
-<<<<<<< HEAD
->>>>>>> 6e963d0 (v-0.0.1  pi0改动 touch encoder 和 2D 视觉编码器，修改动作预测头以适应新的动作维度)
-=======
->>>>>>> f271952f1496d454473fffc0d8fa28ed68bede96
+
         return prefix_embs, prefix_pad_masks, prefix_att_masks
 
         
         
     def embed_prefix(
-        self, images, img_masks, lang_tokens, lang_masks
+        self, images, img_masks, lang_tokens, lang_masks, touch_images, touch_mask
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Embed images with SigLIP and language tokens with embedding layer to prepare
         for PaliGemma transformer processing.
@@ -74,20 +56,8 @@ class Encoder(nn.Module):
         att_masks = []
 
         # TODO: remove for loop
-<<<<<<< HEAD
-<<<<<<< HEAD
+
         for (img, img_mask) in zip(images, img_masks, strict=False):
-=======
-=======
->>>>>>> f271952f1496d454473fffc0d8fa28ed68bede96
-        for (
-            img,
-            img_mask,
-        ) in zip(images, img_masks, strict=False):
-<<<<<<< HEAD
->>>>>>> 6e963d0 (v-0.0.1  pi0改动 touch encoder 和 2D 视觉编码器，修改动作预测头以适应新的动作维度)
-=======
->>>>>>> f271952f1496d454473fffc0d8fa28ed68bede96
             img_emb = self.VL_encoder.embed_image(img)
             img_emb = img_emb.to(dtype=torch.bfloat16)
 
@@ -117,33 +87,23 @@ class Encoder(nn.Module):
         num_lang_embs = lang_emb.shape[1]
         att_masks += [0] * num_lang_embs
 
-<<<<<<< HEAD
-<<<<<<< HEAD
         
-        
-        # # TODO: touch encoder forward
-        # if self.config.touch_encoder is not None:
-        #     touch_embs, touch_mask, touch_att_mask = self.touch_encoder(touch_obs)
-        #     embs.append(touch_embs)
-        #     pad_masks.append(touch_mask)
-        #     num_touch_embs = touch_embs.shape[1]
-        #     att_masks += [0] * num_touch_embs
+        # TODO: touch encoder forward
+        if self.config.touch_encoder is not None:
+            touch_embs = self.touch_encoder(touch_images)
+            touch_embs = touch_embs.to(dtype=torch.bfloat16)
+            touch_embs_dim = touch_embs.shape[-1]
+            touch_embs = touch_embs * torch.tensor(touch_embs_dim**0.5, dtype=touch_embs.dtype, device=touch_embs.device)
             
-=======
->>>>>>> 6e963d0 (v-0.0.1  pi0改动 touch encoder 和 2D 视觉编码器，修改动作预测头以适应新的动作维度)
-=======
->>>>>>> f271952f1496d454473fffc0d8fa28ed68bede96
+            embs.append(touch_embs)
+            pad_masks.append(touch_mask)
+            num_touch_embs = touch_embs.shape[1]
+            att_masks += [0] * num_touch_embs
+        
         embs = torch.cat(embs, dim=1)
         pad_masks = torch.cat(pad_masks, dim=1)
         att_masks = torch.tensor(att_masks, dtype=torch.bool, device=pad_masks.device)
         att_masks = att_masks[None, :].expand(bsize, len(att_masks))
-<<<<<<< HEAD
-<<<<<<< HEAD
-=======
 
->>>>>>> 6e963d0 (v-0.0.1  pi0改动 touch encoder 和 2D 视觉编码器，修改动作预测头以适应新的动作维度)
-=======
-
->>>>>>> f271952f1496d454473fffc0d8fa28ed68bede96
         return embs, pad_masks, att_masks
     

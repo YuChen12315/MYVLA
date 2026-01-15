@@ -55,13 +55,13 @@ class DenoiseActor(BaseDenoiseActor):
             finetune_text_encoder=finetune_text_encoder
         )
 
-        # Action decoder, runs at every denoising timestep
-        self.prediction_head = TransformerHead(
-            embedding_dim=embedding_dim,
-            nhist=nhist * nhand,
-            num_attn_heads=num_attn_heads,
-            num_shared_attn_layers=num_shared_attn_layers
-        )
+        # # Action decoder, runs at every denoising timestep
+        # self.prediction_head = TransformerHead(
+        #     embedding_dim=embedding_dim,
+        #     nhist=nhist * nhand,
+        #     num_attn_heads=num_attn_heads,
+        #     num_shared_attn_layers=num_shared_attn_layers
+        # )
 
 
 class TransformerHead(BaseTransformerHead):
@@ -85,22 +85,22 @@ class TransformerHead(BaseTransformerHead):
 
     def get_positional_embeddings(
         self,
-        traj_xyz, traj_feats,
-        rgb3d_pos, rgb3d_feats, rgb2d_feats, rgb2d_pos,
-        timesteps, proprio_feats,
-        fps_scene_feats, fps_scene_pos,
-        instr_feats, instr_pos
+        action,
+        rgb_pos, 
+        timesteps,
+        fps_scene_pos,
+        instr_pos
     ):
-        rel_traj_pos = self.relative_pe_layer(traj_xyz)
-        rel_scene_pos = self.relative_pe_layer(rgb3d_pos)
+        rel_traj_pos = self.relative_pe_layer(action)
+        rel_scene_pos = self.relative_pe_layer(rgb_pos)
         rel_fps_pos = self.relative_pe_layer(fps_scene_pos)
         rel_pos = torch.cat([rel_traj_pos, rel_fps_pos], 1)
         return rel_traj_pos, rel_scene_pos, rel_pos
 
     def get_sa_feature_sequence(
         self,
-        traj_feats, fps_scene_feats,
-        rgb3d_feats, rgb2d_feats, instr_feats
+        act_feats, fps_scene_feats,
+        rgb3d_feats, instr_feats
     ):
-        features = torch.cat([traj_feats, fps_scene_feats], 1)
+        features = torch.cat([act_feats, fps_scene_feats], 1)
         return features

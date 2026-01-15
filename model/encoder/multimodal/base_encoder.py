@@ -10,7 +10,7 @@ class Encoder(nn.Module):
 
     def __init__(self,
                  backbone="clip",
-                 embedding_dim=60,
+                 embedding_dim=120,
                  nhist=1,
                  num_attn_heads=9,
                  num_vis_instr_attn_layers=2,
@@ -19,7 +19,6 @@ class Encoder(nn.Module):
                  finetune_text_encoder=False):
         super().__init__()
         self.subsampling_factor = fps_subsampling_factor
-        self._backbone_name = backbone
 
         # Instruction encoder
         self.text_encoder, _dim = fetch_text_encoders(backbone)
@@ -40,49 +39,45 @@ class Encoder(nn.Module):
                 dim_fw=4 * embedding_dim, n_heads=num_attn_heads, pre_norm=False
             )
 
-    def forward(self, rgb3d, rgb2d, pcd, instruction, proprio):
+    def forward(self, rgb, pcd, instruction, proprio):
         """
         Encode different modalities, independent of denoising step.
 
         Args:
-            - rgb3d: (B, ncam3d, 3, H, W)
-            - rgb2d: (B, ncam2d, 3, H, W)
+            - rgb: (B, ncam3d, 3, H, W)
             - pcd: (B, ncam3d, 3, H, W)
             - instruction: (B, nt), tokens
             - proprio: (B, nhist, 3+6+X)
 
         Returns:
-            - rgb3d_feats: (B, N, F)
+            - rgb_feats: (B, N, F)
             - pcd: (B, N, 3)
-            - rgb2d_feats: (B, N2d, F)
-            - rgb2d_pos: (B, N2d, 3)
             - instr_feats: (B, L, F)
             - instr_pos: (B, L, 3)
             - proprio_feats: (B, nhist, F)
             - fps_scene_feats: (B, n, F), n < N
             - fps_scene_pos: (B, n, 3), n < N
         """
-        vl_enc_fn = {
-            'clip': self.encode_clip,
-        }[self._backbone_name]
+
         # Compute scene features/positional embeddings, language embeddings
-        rgb3d_feats, rgb2d_feats, pcd, instr_feats = vl_enc_fn(
-            rgb3d, rgb2d, pcd, instruction
-        )
-        rgb2d_pos = None
+        rgb_feats,pcd, instr_feats = self.encode_vl(rgb, pcd, instruction)
 
         # Use the current end-effector position as language 'position'
-        instr_pos = proprio[:, -1:, :3].repeat(1, instr_feats.size(1), 1)
+        instr_pos = proprio[:, -1:, :].repeat(1, instr_feats.size(1), 1)
 
         # Encode proprioception
-        proprio_feats = self.encode_proprio(proprio, rgb3d_feats, pcd)
+        proprio_feats = self.encode_proprio(proprio, rgb_feats, pcd)
 
         # Point subsampling based on scene features
-        fps_scene_feats, fps_scene_pos = self.run_dps(rgb3d_feats, pcd)
+        fps_scene_feats, fps_scene_pos = self.run_dps(rgb_feats, pcd)
 
+        # return (
+        #     rgb, pcd,
+        #     instr_feats, instr_pos,
+        #     proprio_feats,
+        #     fps_scene_feats, fps_scene_pos
+        # )
         return (
-            rgb3d_feats, pcd,
-            rgb2d_feats, rgb2d_pos,
             instr_feats, instr_pos,
             proprio_feats,
             fps_scene_feats, fps_scene_pos
@@ -102,19 +97,17 @@ class Encoder(nn.Module):
         """
         return None
 
-    def encode_clip(self, rgb3d, rgb2d, pcd, text):
+    def encode_vl(self, rgb, pcd, text):
         """
         Compute visual features/pos embeddings.
 
         Args:
-            - rgb3d: (B, ncam3d, 3, H, W), rgb obs of 3D cameras
-            - rgb2d: (B, ncam2d, 3, H, W), rgb obs of 2D cameras
+            - rgb: (B, ncam, 3, H, W), rgb obs of cameras
             - pcd: (B, ncam3d, 3, H, W) or None
             - text: [str] of len=B, text instruction
 
         Returns:
             - rgb3d_feats: (B, Np, F)
-            - rgb2d_feats: (B, ncam2d, F)
             - pcd: (B, Np, 3)
             - instr_feats: (B, L, F)
         """

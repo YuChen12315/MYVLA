@@ -8,15 +8,12 @@ CONFIG_NAME = "config.json"
 class EncoderConfig:
     """Encoder 配置"""
     vl_backbone: Optional[str] = "PaliGemma"
-<<<<<<< HEAD
-<<<<<<< HEAD
+    touch_encoder: str = "nresnet"
     # touch_encoder: str = "moevt"
-    touch_encoder: str = None
-=======
-=======
->>>>>>> f271952f1496d454473fffc0d8fa28ed68bede96
-    touch_encoder: str = "moevt"
->>>>>>> 6e963d0 (v-0.0.1  pi0改动 touch encoder 和 2D 视觉编码器，修改动作预测头以适应新的动作维度)
+    touch_encoder_params: dict = field(default_factory=lambda: {
+        "model": 'resnet18',
+        "embedding_dim": 200,
+    })
     finetune_visual_backbone: bool = False
     finetune_llm_backbone: bool = False
     finetune_touch_encoder: bool = True
@@ -48,24 +45,9 @@ class VLTMConfig(PolicyConfig):
     n_obs_steps: int = 3
     horizon: int = 10
     n_action_steps: int = 10
-<<<<<<< HEAD
-    
-=======
-
-    normalization_mapping: dict[str, NormalizationMode] = field(
-        default_factory=lambda: {
-            "VISUAL": NormalizationMode.MEAN_STD,
-            "STATE": NormalizationMode.MIN_MAX,
-            "ACTION": NormalizationMode.MIN_MAX,
-        }
-    )
     
     resize_imgs_with_padding: Optional[tuple[int, int]] = (224, 224)
     tokenizer_max_length: int = 77
-<<<<<<< HEAD
->>>>>>> 6e963d0 (v-0.0.1  pi0改动 touch encoder 和 2D 视觉编码器，修改动作预测头以适应新的动作维度)
-=======
->>>>>>> f271952f1496d454473fffc0d8fa28ed68bede96
     # Encoder arguments
     encoder_config: EncoderConfig = field(default_factory=EncoderConfig)
     

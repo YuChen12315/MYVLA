@@ -152,7 +152,6 @@ class VLTM(BaseModel):
     def compute_loss(
         self,
         batch: dict[str: torch.Tensor],
-        batch: dict[str: torch.Tensor],
         *,
         train: bool = False,
     ) -> torch.Tensor:

@@ -29,10 +29,9 @@ def load_clip():
     heads = state_dict["visual.layer1.0.conv1.weight"].shape[0] * 32 // 64
     backbone = ModifiedResNetFeatures(layers, output_dim, heads)
     backbone.load_state_dict(clip_model.visual.state_dict())
-    # normalize = clip_transforms.transforms[-1]
+    normalize = clip_transforms.transforms[-1]
     # normalize = CLIPTransform()
-    # return backbone, normalize
-    return backbone
+    return backbone, normalize
 
 
 class ModifiedResNetFeatures(ModifiedResNet):
